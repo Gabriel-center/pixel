@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Advanced Pixel Painter - Last Pixel Blink (Fixed)</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #111;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #app-wrapper {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+            background-color: #111;
+        }
+
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            overflow: hidden;
+            background-color: #282828;
+            display: flex;
+        }
+
+        #paint-canvas {
+            display: block;
+            cursor: crosshair;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-optimize-contrast;
+            background-color: #000;
+        }
+
+        #preview-canvas { /* Still used, but now for the last painted pixel */
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            z-index: 5;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: -webkit-optimize-contrast;
+        }
+
+
+        #toolbar {
+            background-color: #333;
+            color: white;
+            padding: 8px 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+            box-sizing: border-box;
+            z-index: 10;
+            flex-wrap: wrap;
+        }
+
+        #toolbar label, #toolbar span {
+            margin-right: 3px;
+            white-space: nowrap;
+            font-size: 0.9em;
+        }
+        #toolbar input[type="number"] {
+            width: 50px;
+            padding: 3px;
+            margin-right: 5px;
+            font-size: 0.9em;
+        }
+
+        #color-picker {
+            width: 35px;
+            height: 22px;
+            border: none;
+            padding: 0;
+            cursor: pointer;
+            background-color: transparent;
+        }
+
+        .color-swatch {
+            width: 18px;
+            height: 18px;
+            border: 1px solid #555;
+            cursor: pointer;
+            display: inline-block;
+            margin: 0 1px;
+        }
+        .color-swatch:hover { transform: scale(1.1); }
+        .color-swatch.active { border-color: #fff; box-shadow: 0 0 3px #fff; }
+
+        #toolbar button {
+            padding: 5px 8px;
+            background-color: #555;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+        #toolbar button:hover { background-color: #777; }
+        #toolbar button.active { background-color: #007bff; }
+
+        .toolbar-group {
+            display: flex;
+            align-items: center;
+            border-left: 1px solid #444;
+            padding-left: 8px;
+            margin-left: 5px;
+        }
+        .toolbar-group:first-child {
+            border-left: none;
+            padding-left: 0;
+            margin-left: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="app-wrapper">
+        <div id="canvas-container">
+            <canvas id="paint-canvas"></canvas>
+            <canvas id="preview-canvas"></canvas>
+        </div>
+        <div id="toolbar">
+            <div class="toolbar-group">
+                <label for="color-picker">Color:</label>
+                <input type="color" id="color-picker" value="#FF0000">
+                <div id="swatches-container"></div>
+            </div>
+
+            <div class="toolbar-group">
+                <button id="eraser-button">Eraser</button>
+                <button id="clear-button">Clear</button>
+            </div>
+
+            <div class="toolbar-group">
+                <label for="canvas-width-input">W:</label>
+                <input type="number" id="canvas-width-input" min="1" value="640">
+                <label for="canvas-height-input">H:</label>
+                <input type="number" id="canvas-height-input" min="1" value="480">
+                <button id="set-canvas-size-button">Set Size</button>
+            </div>
+
+            <div class="toolbar-group">
+                <button id="download-button">Download</button>
+                <input type="file" id="load-image-input" accept="image/*" style="display: none;">
+                <button id="load-button">Load Image</button>
+            </div>
+            
+            <div class="toolbar-group">
+                <button id="fullscreen-button">Fullscreen</button>
+                <span>Last: <span id="last-pixel-coords">-</span></span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const appWrapper = document.getElementById('app-wrapper');
+        const canvasContainer = document.getElementById('canvas-container');
+        const canvas = document.getElementById('paint-canvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        
+        const previewCanvas = document.getElementById('preview-canvas');
+        const previewCtx = previewCanvas.getContext('2d');
+
+        const colorPicker = document.getElementById('color-picker');
+        const swatchesContainer = document.getElementById('swatches-container');
+        const clearButton = document.getElementById('clear-button');
+        const eraserButton = document.getElementById('eraser-button');
+        const fullscreenButton = document.getElementById('fullscreen-button');
+        const lastPixelCoordsDisplay = document.getElementById('last-pixel-coords');
+
+        const canvasWidthInput = document.getElementById('canvas-width-input');
+        const canvasHeightInput = document.getElementById('canvas-height-input');
+        const setCanvasSizeButton = document.getElementById('set-canvas-size-button');
+        const downloadButton = document.getElementById('download-button');
+        const loadImageInput = document.getElementById('load-image-input');
+        const loadButton = document.getElementById('load-button');
+
+        let currentColor = colorPicker.value;
+        const eraserColor = '#FFFFFF';
+        const defaultCanvasColor = '#000000';
+
+        let isPainting = false;
+        let isErasing = false;
+        let lastPaintedPixel = null; // { x, y } in CSS pixels
+        let currentDPR = window.devicePixelRatio || 1;
+
+        // These will store the *current effective CSS dimensions* of the canvas
+        let specifiedCSSWidth; 
+        let specifiedCSSHeight;
+        // Flag to indicate if the user has explicitly set the size via the "Set Size" button
+        let userExplicitlySetSize = false; 
+
+        let previewBlinkState = false;
+        let blinkInterval = null;
+
+        const predefinedSwatches = [
+            '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
+            '#000000', '#FFFFFF', '#808080', '#FFA500', '#A52A2A', '#4CAF50'
+        ];
+        const numberKeyColorMap = {
+            '1': '#FF0000', // Red
+            '2': '#00FF00', // Green
+            '3': '#0000FF', // Blue
+            '4': '#FFFF00', // Yellow
+            '5': '#FF00FF', // Pink/Magenta
+            '6': '#00FFFF', // Cyan
+            '7': '#FFA500', // Orange
+            '8': '#808080', // Gray
+            '9': '#FFFFFF', // White
+            '0': '#000000'  // Black
+        };
+
+
+        // --- UTILITY FUNCTIONS ---
+        function hexToRgb(hex) { const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex); return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : null; }
+        function rgbToCss(rgbObj) { if (!rgbObj) return ''; return `rgb(${rgbObj.r}, ${rgbObj.g}, ${rgbObj.b})`; }
+        function updateActiveSwatch(selectedHexColor) {
+            const selectedRgbCss = selectedHexColor ? rgbToCss(hexToRgb(selectedHexColor)) : null;
+            document.querySelectorAll('.color-swatch').forEach(swatch => {
+                swatch.classList.toggle('active', selectedRgbCss && swatch.style.backgroundColor === selectedRgbCss);
+            });
+            if (isErasing) document.querySelectorAll('.color-swatch.active').forEach(s => s.classList.remove('active'));
+        }
+        function createSwatches() {
+            predefinedSwatches.forEach(color => {
+                const swatch = document.createElement('div');
+                swatch.classList.add('color-swatch');
+                swatch.style.backgroundColor = color;
+                swatch.title = color;
+                swatch.addEventListener('click', () => {
+                    currentColor = color; colorPicker.value = color; isErasing = false;
+                    eraserButton.classList.remove('active'); eraserButton.style.backgroundColor = '';
+                    updateActiveSwatch(color);
+                });
+                swatchesContainer.appendChild(swatch);
+            });
+        }
+
+        // --- CANVAS SIZING AND PRESERVATION ---
+        function resizeAndPreserveCanvas() {
+            let oldImageData = null;
+            let prevCanvasActualCSSWidth = 0;
+            let prevCanvasActualCSSHeight = 0;
+
+            if (canvas.width > 0 && canvas.height > 0) {
+                // Use actual style.width for previous dimensions if available
+                prevCanvasActualCSSWidth = parseFloat(canvas.style.width) || (canvas.width / currentDPR);
+                prevCanvasActualCSSHeight = parseFloat(canvas.style.height) || (canvas.height / currentDPR);
+                oldImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            }
+            
+            currentDPR = window.devicePixelRatio || 1;
+
+            let targetCSSWidth, targetCSSHeight;
+            const containerRect = canvasContainer.getBoundingClientRect();
+
+            if (isFullscreen()) {
+                targetCSSWidth = Math.max(1, Math.floor(containerRect.width));
+                targetCSSHeight = Math.max(1, Math.floor(containerRect.height));
+                // When fullscreen, input fields (canvasWidthInput, canvasHeightInput) are NOT updated.
+                // They retain the user's non-fullscreen pinned size or last auto-size.
+            } else if (userExplicitlySetSize) {
+                // Use the size set by the user via input fields
+                targetCSSWidth = parseInt(canvasWidthInput.value) || 1;
+                targetCSSHeight = parseInt(canvasHeightInput.value) || 1;
+            } else { // Initial load, or window resize when size is not pinned by user
+                targetCSSWidth = Math.max(1, Math.floor(containerRect.width));
+                targetCSSHeight = Math.max(1, Math.floor(containerRect.height));
+                // Update input fields to reflect the new auto-calculated size
+                canvasWidthInput.value = targetCSSWidth;
+                canvasHeightInput.value = targetCSSHeight;
+            }
+            
+            // Update global variables that track current effective CSS dimensions
+            specifiedCSSWidth = targetCSSWidth;
+            specifiedCSSHeight = targetCSSHeight;
+
+            canvas.width = Math.round(targetCSSWidth * currentDPR);
+            canvas.height = Math.round(targetCSSHeight * currentDPR);
+            canvas.style.width = `${targetCSSWidth}px`;
+            canvas.style.height = `${targetCSSHeight}px`;
+            
+            previewCanvas.width = canvas.width;
+            previewCanvas.height = canvas.height;
+            previewCanvas.style.width = canvas.style.width;
+            previewCanvas.style.height = canvas.style.height;
+
+            ctx.setTransform(currentDPR, 0, 0, currentDPR, 0, 0);
+            previewCtx.setTransform(currentDPR, 0, 0, currentDPR, 0, 0);
+
+            ctx.fillStyle = defaultCanvasColor;
+            ctx.fillRect(0, 0, targetCSSWidth, targetCSSHeight); // Use targetCSSWidth for fill
+
+            if (oldImageData) {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = oldImageData.width;
+                tempCanvas.height = oldImageData.height;
+                tempCanvas.getContext('2d').putImageData(oldImageData, 0, 0);
+                // Draw preserved image, scaling it appropriately if its original CSS size differs from new target
+                ctx.drawImage(tempCanvas, 0, 0, prevCanvasActualCSSWidth, prevCanvasActualCSSHeight);
+            }
+            console.log(`Canvas resized. Effective CSS: ${targetCSSWidth}x${targetCSSHeight}, DPR: ${currentDPR}`);
+            
+            if (lastPaintedPixel) { startBlinkingLastPixel(); } 
+            else { stopBlinkingLastPixel(); }
+        }
+        
+        setCanvasSizeButton.addEventListener('click', () => {
+            const newWidth = parseInt(canvasWidthInput.value);
+            const newHeight = parseInt(canvasHeightInput.value);
+            if (isNaN(newWidth) || newWidth < 1 || isNaN(newHeight) || newHeight < 1) {
+                alert("Please enter valid positive numbers for width and height."); return;
+            }
+            // canvasWidthInput.value and canvasHeightInput.value are already set.
+            userExplicitlySetSize = true; // Mark that user has now pinned the size.
+            resizeAndPreserveCanvas();
+        });
+
+        // --- PAINTING LOGIC ---
+        function paintPixel(x_css, y_css, color) {
+            // Boundary check uses the current effective CSS dimensions (specifiedCSSWidth/Height)
+            if (x_css < 0 || x_css >= specifiedCSSWidth || y_css < 0 || y_css >= specifiedCSSHeight) return;
+            
+            if (lastPaintedPixel && lastPaintedPixel.x === x_css && lastPaintedPixel.y === y_css) {
+                previewCtx.clearRect(lastPaintedPixel.x, lastPaintedPixel.y, 1, 1);
+            }
+            else if (lastPaintedPixel) {
+                 previewCtx.clearRect(lastPaintedPixel.x, lastPaintedPixel.y, 1, 1);
+            }
+
+            ctx.fillStyle = color;
+            ctx.fillRect(Math.floor(x_css), Math.floor(y_css), 1, 1);
+            
+            lastPaintedPixel = { x: Math.floor(x_css), y: Math.floor(y_css) };
+            lastPixelCoordsDisplay.textContent = `${lastPaintedPixel.x}, ${lastPaintedPixel.y}`;
+            
+            startBlinkingLastPixel();
+        }
+
+        // --- MOUSE/INTERACTION HANDLERS ---
+        function handleInteraction(event, isMoveEvent = false) {
+            if (isMoveEvent && !isPainting) return;
+            if (event.type === 'mousedown') { isPainting = true; window.focus(); }
+
+            const rect = canvas.getBoundingClientRect();
+            const x_css = Math.floor(event.clientX - rect.left);
+            const y_css = Math.floor(event.clientY - rect.top);
+            paintPixel(x_css, y_css, isErasing ? eraserColor : currentColor);
+        }
+        canvas.addEventListener('mousedown', (e) => handleInteraction(e));
+        canvas.addEventListener('mousemove', (e) => handleInteraction(e, true));
+        document.addEventListener('mouseup', () => { isPainting = false; });
+
+        // --- LAST PAINTED PIXEL BLINK LOGIC ---
+        function getPixelColorFromMainCanvas(x_css, y_css) {
+            if (x_css < 0 || x_css >= specifiedCSSWidth || y_css < 0 || y_css >= specifiedCSSHeight) {
+                return [0,0,0,255]; 
+            }
+            const deviceX = Math.floor(x_css * currentDPR);
+            const deviceY = Math.floor(y_css * currentDPR);
+            try {
+                return ctx.getImageData(deviceX, deviceY, 1, 1).data;
+            } catch (e) {
+                console.warn("Could not getImageData for preview.", e);
+                return [0,0,0,255];
+            }
+        }
+
+        function getNegativeColor(r, g, b) { return `rgb(${255-r}, ${255-g}, ${255-b})`; }
+
+        function updateLastPixelBlink() {
+            if (!lastPaintedPixel) {
+                previewCtx.clearRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
+                return;
+            }
+            
+            previewCtx.clearRect(lastPaintedPixel.x, lastPaintedPixel.y, 1, 1);
+
+            if (previewBlinkState) { 
+                const originalPixelData = getPixelColorFromMainCanvas(lastPaintedPixel.x, lastPaintedPixel.y);
+                previewCtx.fillStyle = getNegativeColor(originalPixelData[0], originalPixelData[1], originalPixelData[2]);
+                previewCtx.fillRect(lastPaintedPixel.x, lastPaintedPixel.y, 1, 1);
+            }
+        }
+
+        function startBlinkingLastPixel() {
+            stopBlinkingLastPixel(); 
+            if (!lastPaintedPixel) return;
+
+            blinkInterval = setInterval(() => {
+                previewBlinkState = !previewBlinkState;
+                updateLastPixelBlink();
+            }, 400);
+            previewBlinkState = true; 
+            updateLastPixelBlink();
+        }
+
+        function stopBlinkingLastPixel() {
+            if (blinkInterval) {
+                clearInterval(blinkInterval);
+                blinkInterval = null;
+            }
+            if (lastPaintedPixel) {
+                 previewCtx.clearRect(lastPaintedPixel.x, lastPaintedPixel.y, 1, 1);
+            } else {
+                 previewCtx.clearRect(0,0, specifiedCSSWidth, specifiedCSSHeight);
+            }
+            previewBlinkState = false;
+        }
+
+        // --- TOOLBAR ACTIONS (Color, Eraser, Clear) ---
+        colorPicker.addEventListener('input', (e) => {
+             currentColor = e.target.value; isErasing = false;
+             eraserButton.classList.remove('active'); eraserButton.style.backgroundColor = '';
+             updateActiveSwatch(currentColor);
+        });
+        eraserButton.addEventListener('click', () => {
+            isErasing = !isErasing;
+            eraserButton.classList.toggle('active', isErasing);
+            eraserButton.style.backgroundColor = isErasing ? '#999' : '';
+            updateActiveSwatch(isErasing ? null : currentColor);
+        });
+        clearButton.addEventListener('click', () => {
+            if (confirm('Are you sure you want to clear the canvas? This cannot be undone.')) {
+                ctx.fillStyle = defaultCanvasColor;
+                // Clear using the current effective CSS dimensions of the canvas
+                ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
+                lastPaintedPixel = null;
+                lastPixelCoordsDisplay.textContent = "-";
+                stopBlinkingLastPixel();
+            }
+        });
+
+        // --- LOAD/DOWNLOAD IMAGE ---
+        downloadButton.addEventListener('click', () => {
+            const dataURL = canvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.download = 'pixel-art.png';
+            link.href = dataURL;
+            link.click();
+        });
+
+        loadButton.addEventListener('click', () => loadImageInput.click());
+        loadImageInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (eventReader) => {
+                const img = new Image();
+                img.onload = () => {
+                    // Clear based on current canvas dimensions before drawing image
+                    ctx.fillStyle = defaultCanvasColor;
+                    ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight); 
+                    ctx.drawImage(img, 0, 0); // Draw image at actual size, might need scaling options later
+                    lastPaintedPixel = null;
+                    lastPixelCoordsDisplay.textContent = "-";
+                    stopBlinkingLastPixel();
+                }
+                img.onerror = () => alert("Could not load image.");
+                img.src = eventReader.target.result;
+            }
+            reader.readAsDataURL(file);
+            e.target.value = null;
+        });
+
+
+        // --- FULLSCREEN LOGIC ---
+        function isFullscreen() { return document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement; }
+        function toggleFullscreen() {
+            if (!isFullscreen()) {
+                const el = appWrapper;
+                if (el.requestFullscreen) el.requestFullscreen();
+                else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+                else if (el.msRequestFullscreen) el.msRequestFullscreen();
+                else if (el.mozRequestFullScreen) el.mozRequestFullScreen();
+            } else {
+                if (document.exitFullscreen) document.exitFullscreen();
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                else if (document.msExitFullscreen) document.msExitFullscreen();
+                else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+            }
+        }
+        fullscreenButton.addEventListener('click', toggleFullscreen);
+        function onFullscreenChange() {
+            fullscreenButton.textContent = isFullscreen() ? 'Exit Fullscreen' : 'Fullscreen';
+            fullscreenButton.classList.toggle('active', isFullscreen());
+            setTimeout(resizeAndPreserveCanvas, 50); // Ensure canvas resizes AFTER fullscreen transition
+        }
+        document.addEventListener('fullscreenchange', onFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+        document.addEventListener('mozfullscreenchange', onFullscreenChange);
+        document.addEventListener('MSFullscreenChange', onFullscreenChange);
+
+        // --- KEYBOARD SHORTCUTS (Arrow Keys & Number Keys for Colors) ---
+        window.addEventListener('keydown', (e) => {
+            const isInputFocused = document.activeElement === colorPicker ||
+                                   document.activeElement === canvasWidthInput ||
+                                   document.activeElement === canvasHeightInput;
+
+            // Arrow key painting
+            if (!isInputFocused && lastPaintedPixel) {
+                let dx = 0; dy = 0;
+                let arrowKeyPressed = false;
+                switch (e.key) {
+                    case 'ArrowUp': dy = -1; arrowKeyPressed = true; break;
+                    case 'ArrowDown': dy = 1; arrowKeyPressed = true; break;
+                    case 'ArrowLeft': dx = -1; arrowKeyPressed = true; break;
+                    case 'ArrowRight': dx = 1; arrowKeyPressed = true; break;
+                }
+                if (arrowKeyPressed) {
+                    e.preventDefault();
+                    const newX_css = lastPaintedPixel.x + dx;
+                    const newY_css = lastPaintedPixel.y + dy;
+                    // Boundary check uses current effective CSS dimensions
+                    if (newX_css >= 0 && newX_css < specifiedCSSWidth && newY_css >= 0 && newY_css < specifiedCSSHeight) {
+                         paintPixel(newX_css, newY_css, isErasing ? eraserColor : currentColor);
+                    }
+                    return; // Arrow key processed
+                }
+            }
+
+            // Number key color selection
+            if (!isInputFocused && numberKeyColorMap[e.key]) {
+                e.preventDefault();
+                const newColor = numberKeyColorMap[e.key];
+                currentColor = newColor;
+                colorPicker.value = currentColor;
+                isErasing = false;
+                eraserButton.classList.remove('active');
+                eraserButton.style.backgroundColor = ''; // Reset eraser button style
+                updateActiveSwatch(currentColor);
+                return; // Color key processed
+            }
+        });
+
+        // --- INITIAL SETUP ---
+        createSwatches();
+        userExplicitlySetSize = false; // Start with responsive canvas until user sets size.
+                                      // Input field values will be updated by initial resize.
+        resizeAndPreserveCanvas(); // Perform initial sizing.
+        updateActiveSwatch(currentColor);
+        onFullscreenChange(); // Set initial fullscreen button text.
+
+        let resizeDebounceTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeDebounceTimeout);
+            resizeDebounceTimeout = setTimeout(() => {
+                if (!isFullscreen()) { // Only handle non-fullscreen resizes here
+                     resizeAndPreserveCanvas();
+                }
+            }, 150);
+        });
+
+    </script>
+</body>
+</html>
