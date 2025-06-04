@@ -124,6 +124,14 @@
             padding-left: 0;
             margin-left: 0;
         }
+        #clear-confirmation-div {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        #clear-confirmation-div span {
+            font-size: 0.85em;
+        }
     </style>
 </head>
 <body>
@@ -142,6 +150,11 @@
             <div class="toolbar-group">
                 <button id="eraser-button">Eraser</button>
                 <button id="clear-button">Clear</button>
+                <div id="clear-confirmation-div" style="display: none;">
+                    <span>Sure?</span>
+                    <button id="confirm-clear-yes">Yes</button>
+                    <button id="confirm-clear-no">No</button>
+                </div>
             </div>
 
             <div class="toolbar-group">
@@ -176,7 +189,12 @@
 
         const colorPicker = document.getElementById('color-picker');
         const swatchesContainer = document.getElementById('swatches-container');
+        
         const clearButton = document.getElementById('clear-button');
+        const clearConfirmationDiv = document.getElementById('clear-confirmation-div');
+        const confirmClearYesButton = document.getElementById('confirm-clear-yes');
+        const confirmClearNoButton = document.getElementById('confirm-clear-no');
+
         const eraserButton = document.getElementById('eraser-button');
         const fullscreenButton = document.getElementById('fullscreen-button');
         const lastPixelCoordsDisplay = document.getElementById('last-pixel-coords');
@@ -197,11 +215,9 @@
         let lastPaintedPixel = null; // { x, y } in CSS pixels
         let currentDPR = window.devicePixelRatio || 1;
 
-        // These will store the *current effective CSS dimensions* of the canvas
-        let specifiedCSSWidth; 
-        let specifiedCSSHeight;
-        // Flag to indicate if the user has explicitly set the size via the "Set Size" button
-        let userExplicitlySetSize = false; 
+        let specifiedCSSWidth = 0;
+        let specifiedCSSHeight = 0;
+        let initialSizeApplied = false;
 
         let previewBlinkState = false;
         let blinkInterval = null;
@@ -210,17 +226,18 @@
             '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
             '#000000', '#FFFFFF', '#808080', '#FFA500', '#A52A2A', '#4CAF50'
         ];
-        const numberKeyColorMap = {
-            '1': '#FF0000', // Red
-            '2': '#00FF00', // Green
-            '3': '#0000FF', // Blue
-            '4': '#FFFF00', // Yellow
-            '5': '#FF00FF', // Pink/Magenta
-            '6': '#00FFFF', // Cyan
-            '7': '#FFA500', // Orange
-            '8': '#808080', // Gray
-            '9': '#FFFFFF', // White
-            '0': '#000000'  // Black
+
+        const colorKeyMap = {
+            '1': predefinedSwatches[0], // Red
+            '2': predefinedSwatches[1], // Green
+            '3': predefinedSwatches[2], // Blue
+            '4': predefinedSwatches[3], // Yellow
+            '5': predefinedSwatches[4], // Magenta/Pink
+            '6': predefinedSwatches[5], // Cyan
+            '7': predefinedSwatches[9], // Orange
+            '8': predefinedSwatches[8], // Gray
+            '9': predefinedSwatches[7], // White
+            '0': predefinedSwatches[6], // Black
         };
 
 
@@ -241,13 +258,21 @@
                 swatch.style.backgroundColor = color;
                 swatch.title = color;
                 swatch.addEventListener('click', () => {
-                    currentColor = color; colorPicker.value = color; isErasing = false;
-                    eraserButton.classList.remove('active'); eraserButton.style.backgroundColor = '';
-                    updateActiveSwatch(color);
+                    setColor(color);
                 });
                 swatchesContainer.appendChild(swatch);
             });
         }
+
+        function setColor(newColor) {
+            currentColor = newColor;
+            colorPicker.value = newColor;
+            isErasing = false;
+            eraserButton.classList.remove('active');
+            eraserButton.style.backgroundColor = '';
+            updateActiveSwatch(newColor);
+        }
+
 
         // --- CANVAS SIZING AND PRESERVATION ---
         function resizeAndPreserveCanvas() {
@@ -256,7 +281,6 @@
             let prevCanvasActualCSSHeight = 0;
 
             if (canvas.width > 0 && canvas.height > 0) {
-                // Use actual style.width for previous dimensions if available
                 prevCanvasActualCSSWidth = parseFloat(canvas.style.width) || (canvas.width / currentDPR);
                 prevCanvasActualCSSHeight = parseFloat(canvas.style.height) || (canvas.height / currentDPR);
                 oldImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -265,28 +289,19 @@
             currentDPR = window.devicePixelRatio || 1;
 
             let targetCSSWidth, targetCSSHeight;
-            const containerRect = canvasContainer.getBoundingClientRect();
-
-            if (isFullscreen()) {
+            if (initialSizeApplied) {
+                targetCSSWidth = specifiedCSSWidth;
+                targetCSSHeight = specifiedCSSHeight;
+            } else {
+                const containerRect = canvasContainer.getBoundingClientRect();
                 targetCSSWidth = Math.max(1, Math.floor(containerRect.width));
                 targetCSSHeight = Math.max(1, Math.floor(containerRect.height));
-                // When fullscreen, input fields (canvasWidthInput, canvasHeightInput) are NOT updated.
-                // They retain the user's non-fullscreen pinned size or last auto-size.
-            } else if (userExplicitlySetSize) {
-                // Use the size set by the user via input fields
-                targetCSSWidth = parseInt(canvasWidthInput.value) || 1;
-                targetCSSHeight = parseInt(canvasHeightInput.value) || 1;
-            } else { // Initial load, or window resize when size is not pinned by user
-                targetCSSWidth = Math.max(1, Math.floor(containerRect.width));
-                targetCSSHeight = Math.max(1, Math.floor(containerRect.height));
-                // Update input fields to reflect the new auto-calculated size
-                canvasWidthInput.value = targetCSSWidth;
-                canvasHeightInput.value = targetCSSHeight;
+                specifiedCSSWidth = targetCSSWidth;
+                specifiedCSSHeight = targetCSSHeight;
+                canvasWidthInput.value = specifiedCSSWidth;
+                canvasHeightInput.value = specifiedCSSHeight;
+                initialSizeApplied = true;
             }
-            
-            // Update global variables that track current effective CSS dimensions
-            specifiedCSSWidth = targetCSSWidth;
-            specifiedCSSHeight = targetCSSHeight;
 
             canvas.width = Math.round(targetCSSWidth * currentDPR);
             canvas.height = Math.round(targetCSSHeight * currentDPR);
@@ -302,17 +317,16 @@
             previewCtx.setTransform(currentDPR, 0, 0, currentDPR, 0, 0);
 
             ctx.fillStyle = defaultCanvasColor;
-            ctx.fillRect(0, 0, targetCSSWidth, targetCSSHeight); // Use targetCSSWidth for fill
+            ctx.fillRect(0, 0, targetCSSWidth, targetCSSHeight);
 
             if (oldImageData) {
                 const tempCanvas = document.createElement('canvas');
                 tempCanvas.width = oldImageData.width;
                 tempCanvas.height = oldImageData.height;
                 tempCanvas.getContext('2d').putImageData(oldImageData, 0, 0);
-                // Draw preserved image, scaling it appropriately if its original CSS size differs from new target
                 ctx.drawImage(tempCanvas, 0, 0, prevCanvasActualCSSWidth, prevCanvasActualCSSHeight);
             }
-            console.log(`Canvas resized. Effective CSS: ${targetCSSWidth}x${targetCSSHeight}, DPR: ${currentDPR}`);
+            console.log(`Canvas resized. Target CSS: ${targetCSSWidth}x${targetCSSHeight}`);
             
             if (lastPaintedPixel) { startBlinkingLastPixel(); } 
             else { stopBlinkingLastPixel(); }
@@ -324,14 +338,13 @@
             if (isNaN(newWidth) || newWidth < 1 || isNaN(newHeight) || newHeight < 1) {
                 alert("Please enter valid positive numbers for width and height."); return;
             }
-            // canvasWidthInput.value and canvasHeightInput.value are already set.
-            userExplicitlySetSize = true; // Mark that user has now pinned the size.
+            specifiedCSSWidth = newWidth; specifiedCSSHeight = newHeight;
+            initialSizeApplied = true;
             resizeAndPreserveCanvas();
         });
 
         // --- PAINTING LOGIC ---
         function paintPixel(x_css, y_css, color) {
-            // Boundary check uses the current effective CSS dimensions (specifiedCSSWidth/Height)
             if (x_css < 0 || x_css >= specifiedCSSWidth || y_css < 0 || y_css >= specifiedCSSHeight) return;
             
             if (lastPaintedPixel && lastPaintedPixel.x === x_css && lastPaintedPixel.y === y_css) {
@@ -423,9 +436,7 @@
 
         // --- TOOLBAR ACTIONS (Color, Eraser, Clear) ---
         colorPicker.addEventListener('input', (e) => {
-             currentColor = e.target.value; isErasing = false;
-             eraserButton.classList.remove('active'); eraserButton.style.backgroundColor = '';
-             updateActiveSwatch(currentColor);
+             setColor(e.target.value);
         });
         eraserButton.addEventListener('click', () => {
             isErasing = !isErasing;
@@ -433,16 +444,28 @@
             eraserButton.style.backgroundColor = isErasing ? '#999' : '';
             updateActiveSwatch(isErasing ? null : currentColor);
         });
+
         clearButton.addEventListener('click', () => {
-            if (confirm('Are you sure you want to clear the canvas? This cannot be undone.')) {
-                ctx.fillStyle = defaultCanvasColor;
-                // Clear using the current effective CSS dimensions of the canvas
-                ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
-                lastPaintedPixel = null;
-                lastPixelCoordsDisplay.textContent = "-";
-                stopBlinkingLastPixel();
-            }
+            clearButton.style.display = 'none';
+            clearConfirmationDiv.style.display = 'flex';
         });
+
+        confirmClearYesButton.addEventListener('click', () => {
+            ctx.fillStyle = defaultCanvasColor;
+            ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
+            lastPaintedPixel = null;
+            lastPixelCoordsDisplay.textContent = "-";
+            stopBlinkingLastPixel();
+            
+            clearConfirmationDiv.style.display = 'none';
+            clearButton.style.display = 'inline-block';
+        });
+
+        confirmClearNoButton.addEventListener('click', () => {
+            clearConfirmationDiv.style.display = 'none';
+            clearButton.style.display = 'inline-block';
+        });
+
 
         // --- LOAD/DOWNLOAD IMAGE ---
         downloadButton.addEventListener('click', () => {
@@ -461,10 +484,9 @@
             reader.onload = (eventReader) => {
                 const img = new Image();
                 img.onload = () => {
-                    // Clear based on current canvas dimensions before drawing image
                     ctx.fillStyle = defaultCanvasColor;
-                    ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight); 
-                    ctx.drawImage(img, 0, 0); // Draw image at actual size, might need scaling options later
+                    ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
+                    ctx.drawImage(img, 0, 0, specifiedCSSWidth, specifiedCSSHeight); // Draw to fit current canvas
                     lastPaintedPixel = null;
                     lastPixelCoordsDisplay.textContent = "-";
                     stopBlinkingLastPixel();
@@ -497,68 +519,59 @@
         function onFullscreenChange() {
             fullscreenButton.textContent = isFullscreen() ? 'Exit Fullscreen' : 'Fullscreen';
             fullscreenButton.classList.toggle('active', isFullscreen());
-            setTimeout(resizeAndPreserveCanvas, 50); // Ensure canvas resizes AFTER fullscreen transition
+            setTimeout(resizeAndPreserveCanvas, 50);
         }
         document.addEventListener('fullscreenchange', onFullscreenChange);
         document.addEventListener('webkitfullscreenchange', onFullscreenChange);
         document.addEventListener('mozfullscreenchange', onFullscreenChange);
         document.addEventListener('MSFullscreenChange', onFullscreenChange);
 
-        // --- KEYBOARD SHORTCUTS (Arrow Keys & Number Keys for Colors) ---
+        // --- KEYBOARD SHORTCUTS (Arrow Keys & Color Numbers) ---
         window.addEventListener('keydown', (e) => {
-            const isInputFocused = document.activeElement === colorPicker ||
-                                   document.activeElement === canvasWidthInput ||
-                                   document.activeElement === canvasHeightInput;
+            if (document.activeElement === colorPicker || 
+                document.activeElement === canvasWidthInput ||
+                document.activeElement === canvasHeightInput) return;
 
             // Arrow key painting
-            if (!isInputFocused && lastPaintedPixel) {
+            if (lastPaintedPixel) {
                 let dx = 0; dy = 0;
-                let arrowKeyPressed = false;
                 switch (e.key) {
-                    case 'ArrowUp': dy = -1; arrowKeyPressed = true; break;
-                    case 'ArrowDown': dy = 1; arrowKeyPressed = true; break;
-                    case 'ArrowLeft': dx = -1; arrowKeyPressed = true; break;
-                    case 'ArrowRight': dx = 1; arrowKeyPressed = true; break;
+                    case 'ArrowUp': dy = -1; break; case 'ArrowDown': dy = 1; break;
+                    case 'ArrowLeft': dx = -1; break; case 'ArrowRight': dx = 1; break;
                 }
-                if (arrowKeyPressed) {
+                if (dx !== 0 || dy !== 0) {
                     e.preventDefault();
                     const newX_css = lastPaintedPixel.x + dx;
                     const newY_css = lastPaintedPixel.y + dy;
-                    // Boundary check uses current effective CSS dimensions
                     if (newX_css >= 0 && newX_css < specifiedCSSWidth && newY_css >= 0 && newY_css < specifiedCSSHeight) {
                          paintPixel(newX_css, newY_css, isErasing ? eraserColor : currentColor);
                     }
-                    return; // Arrow key processed
+                    return; // Processed arrow key, no need to check for color keys
                 }
             }
 
             // Number key color selection
-            if (!isInputFocused && numberKeyColorMap[e.key]) {
+            if (colorKeyMap.hasOwnProperty(e.key)) {
                 e.preventDefault();
-                const newColor = numberKeyColorMap[e.key];
-                currentColor = newColor;
-                colorPicker.value = currentColor;
-                isErasing = false;
-                eraserButton.classList.remove('active');
-                eraserButton.style.backgroundColor = ''; // Reset eraser button style
-                updateActiveSwatch(currentColor);
-                return; // Color key processed
+                setColor(colorKeyMap[e.key]);
             }
         });
 
         // --- INITIAL SETUP ---
         createSwatches();
-        userExplicitlySetSize = false; // Start with responsive canvas until user sets size.
-                                      // Input field values will be updated by initial resize.
-        resizeAndPreserveCanvas(); // Perform initial sizing.
-        updateActiveSwatch(currentColor);
-        onFullscreenChange(); // Set initial fullscreen button text.
+        specifiedCSSWidth = parseInt(canvasWidthInput.value) || 640;
+        specifiedCSSHeight = parseInt(canvasHeightInput.value) || 480;
+        initialSizeApplied = true;
+
+        resizeAndPreserveCanvas();
+        setColor(currentColor); // Ensure initial color and swatch are set
+        onFullscreenChange();
 
         let resizeDebounceTimeout;
         window.addEventListener('resize', () => {
             clearTimeout(resizeDebounceTimeout);
             resizeDebounceTimeout = setTimeout(() => {
-                if (!isFullscreen()) { // Only handle non-fullscreen resizes here
+                if (!isFullscreen()) {
                      resizeAndPreserveCanvas();
                 }
             }, 150);
