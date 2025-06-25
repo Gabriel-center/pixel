@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Advanced Pixel Painter - Last Pixel Blink (Fixed)</title>
+    <title>Advanced Pixel Painter - Evolving GoL</title>
     <style>
         body, html {
             margin: 0;
@@ -66,6 +66,7 @@
             box-sizing: border-box;
             z-index: 10;
             flex-wrap: wrap;
+            position: relative; /* For positioning the test options */
         }
 
         #toolbar label, #toolbar span {
@@ -111,6 +112,8 @@
         }
         #toolbar button:hover { background-color: #777; }
         #toolbar button.active { background-color: #007bff; }
+        #toolbar button.gol-active { background-color: #28a745; } /* Green for active GoL */
+
 
         .toolbar-group {
             display: flex;
@@ -131,6 +134,27 @@
         }
         #clear-confirmation-div span {
             font-size: 0.85em;
+        }
+        
+        /* NEW: Styles for the test options popup */
+        #test-options-container {
+            display: none;
+            position: absolute;
+            bottom: 100%; /* Position it above the toolbar */
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: #444;
+            border: 1px solid #888;
+            border-radius: 5px;
+            padding: 5px;
+            z-index: 20;
+            display: none; /* Initially hidden */
+            gap: 5px;
+        }
+        #test-options-container button {
+            width: 28px;
+            height: 28px;
+            border: 2px solid #222;
         }
     </style>
 </head>
@@ -169,11 +193,21 @@
                 <button id="download-button">Download</button>
                 <input type="file" id="load-image-input" accept="image/*" style="display: none;">
                 <button id="load-button">Load Image</button>
+                <button id="gol-button">Start GoL</button>
+                <button id="test-button">Test</button> <!-- NEW BUTTON -->
             </div>
             
             <div class="toolbar-group">
                 <button id="fullscreen-button">Fullscreen</button>
                 <span>Last: <span id="last-pixel-coords">-</span></span>
+            </div>
+
+            <!-- NEW HIDDEN OPTIONS CONTAINER -->
+            <div id="test-options-container">
+                <button id="test-opt-red" data-color="#FF0000" style="background-color: #FF0000;" title="Fill Red"></button>
+                <button id="test-opt-green" data-color="#00FF00" style="background-color: #00FF00;" title="Fill Green"></button>
+                <button id="test-opt-blue" data-color="#0000FF" style="background-color: #0000FF;" title="Fill Blue"></button>
+                <button id="test-opt-white" data-color="#FFFFFF" style="background-color: #FFFFFF;" title="Fill White"></button>
             </div>
         </div>
     </div>
@@ -205,14 +239,28 @@
         const downloadButton = document.getElementById('download-button');
         const loadImageInput = document.getElementById('load-image-input');
         const loadButton = document.getElementById('load-button');
+        const golButton = document.getElementById('gol-button');
+
+        // --- NEW: Test feature elements and state ---
+        const testButton = document.getElementById('test-button');
+        const testOptionsContainer = document.getElementById('test-options-container');
+        let isTestRunning = false;
+        let testIntervalId = null;
+        let testHoldTimeoutId = null;
+        const TEST_CYCLE_COLORS = ["#FF0000", "#00FF00", "#0000FF", "#FFFFFF"];
+        const TEST_CYCLE_DELAY = 2000; // 2 seconds
+        const TEST_HOLD_DURATION = 500; // 0.5 seconds
+        let currentTestColorIndex = 0;
+
 
         let currentColor = colorPicker.value;
         const eraserColor = '#FFFFFF';
-        const defaultCanvasColor = '#000000';
+        const defaultCanvasColor = '#000000'; // Black
+        let defaultCanvasColorRGB = null; // Will be {r, g, b} of defaultCanvasColor
 
         let isPainting = false;
         let isErasing = false;
-        let lastPaintedPixel = null; // { x, y } in CSS pixels
+        let lastPaintedPixel = null; 
         let currentDPR = window.devicePixelRatio || 1;
 
         let specifiedCSSWidth = 0;
@@ -222,28 +270,34 @@
         let previewBlinkState = false;
         let blinkInterval = null;
 
+        // GoL State
+        let isGoLRunning = false;
+        let golIntervalId = null;
+        const golStepDelay = 200; // ms
+
+
         const predefinedSwatches = [
             '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF',
             '#000000', '#FFFFFF', '#808080', '#FFA500', '#A52A2A', '#4CAF50'
         ];
 
         const colorKeyMap = {
-            '1': predefinedSwatches[0], // Red
-            '2': predefinedSwatches[1], // Green
-            '3': predefinedSwatches[2], // Blue
-            '4': predefinedSwatches[3], // Yellow
-            '5': predefinedSwatches[4], // Magenta/Pink
-            '6': predefinedSwatches[5], // Cyan
-            '7': predefinedSwatches[9], // Orange
-            '8': predefinedSwatches[8], // Gray
-            '9': predefinedSwatches[7], // White
-            '0': predefinedSwatches[6], // Black
+            '1': predefinedSwatches[0], '2': predefinedSwatches[1], '3': predefinedSwatches[2], 
+            '4': predefinedSwatches[3], '5': predefinedSwatches[4], '6': predefinedSwatches[5], 
+            '7': predefinedSwatches[9], '8': predefinedSwatches[8], '9': predefinedSwatches[7], 
+            '0': predefinedSwatches[6], 
         };
 
 
         // --- UTILITY FUNCTIONS ---
-        function hexToRgb(hex) { const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex); return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : null; }
-        function rgbToCss(rgbObj) { if (!rgbObj) return ''; return `rgb(${rgbObj.r}, ${rgbObj.g}, ${rgbObj.b})`; }
+        function hexToRgb(hex) { 
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex); 
+            return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : { r:0, g:0, b:0 };
+        }
+        function rgbToCss(rgbObj) { 
+            if (!rgbObj) return defaultCanvasColor; 
+            return `rgb(${rgbObj.r}, ${rgbObj.g}, ${rgbObj.b})`; 
+        }
         function updateActiveSwatch(selectedHexColor) {
             const selectedRgbCss = selectedHexColor ? rgbToCss(hexToRgb(selectedHexColor)) : null;
             document.querySelectorAll('.color-swatch').forEach(swatch => {
@@ -265,6 +319,7 @@
         }
 
         function setColor(newColor) {
+            stopTestCycle(); // Stop test mode if a color is chosen
             currentColor = newColor;
             colorPicker.value = newColor;
             isErasing = false;
@@ -280,10 +335,18 @@
             let prevCanvasActualCSSWidth = 0;
             let prevCanvasActualCSSHeight = 0;
 
+            if (isGoLRunning) toggleGoL(); 
+            stopTestCycle(); // Stop test cycle on resize
+
             if (canvas.width > 0 && canvas.height > 0) {
                 prevCanvasActualCSSWidth = parseFloat(canvas.style.width) || (canvas.width / currentDPR);
                 prevCanvasActualCSSHeight = parseFloat(canvas.style.height) || (canvas.height / currentDPR);
-                oldImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                try {
+                    oldImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                } catch (e) {
+                    console.warn("Could not getImageData during resize preservation:", e);
+                    oldImageData = null;
+                }
             }
             
             currentDPR = window.devicePixelRatio || 1;
@@ -324,9 +387,8 @@
                 tempCanvas.width = oldImageData.width;
                 tempCanvas.height = oldImageData.height;
                 tempCanvas.getContext('2d').putImageData(oldImageData, 0, 0);
-                ctx.drawImage(tempCanvas, 0, 0, prevCanvasActualCSSWidth, prevCanvasActualCSSHeight);
+                ctx.drawImage(tempCanvas, 0, 0, prevCanvasActualCSSWidth, prevCanvasActualCSSHeight, 0, 0, targetCSSWidth, targetCSSHeight);
             }
-            console.log(`Canvas resized. Target CSS: ${targetCSSWidth}x${targetCSSHeight}`);
             
             if (lastPaintedPixel) { startBlinkingLastPixel(); } 
             else { stopBlinkingLastPixel(); }
@@ -345,6 +407,8 @@
 
         // --- PAINTING LOGIC ---
         function paintPixel(x_css, y_css, color) {
+            stopTestCycle(); // Any paint action stops the test mode
+            if (isGoLRunning) return; 
             if (x_css < 0 || x_css >= specifiedCSSWidth || y_css < 0 || y_css >= specifiedCSSHeight) return;
             
             if (lastPaintedPixel && lastPaintedPixel.x === x_css && lastPaintedPixel.y === y_css) {
@@ -365,6 +429,8 @@
 
         // --- MOUSE/INTERACTION HANDLERS ---
         function handleInteraction(event, isMoveEvent = false) {
+            stopTestCycle(); // Any interaction stops the test mode
+            if (isGoLRunning) return;
             if (isMoveEvent && !isPainting) return;
             if (event.type === 'mousedown') { isPainting = true; window.focus(); }
 
@@ -387,7 +453,6 @@
             try {
                 return ctx.getImageData(deviceX, deviceY, 1, 1).data;
             } catch (e) {
-                console.warn("Could not getImageData for preview.", e);
                 return [0,0,0,255];
             }
         }
@@ -395,7 +460,7 @@
         function getNegativeColor(r, g, b) { return `rgb(${255-r}, ${255-g}, ${255-b})`; }
 
         function updateLastPixelBlink() {
-            if (!lastPaintedPixel) {
+            if (!lastPaintedPixel || isGoLRunning || isTestRunning) {
                 previewCtx.clearRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
                 return;
             }
@@ -410,6 +475,7 @@
         }
 
         function startBlinkingLastPixel() {
+            if (isGoLRunning || isTestRunning) return;
             stopBlinkingLastPixel(); 
             if (!lastPaintedPixel) return;
 
@@ -439,6 +505,7 @@
              setColor(e.target.value);
         });
         eraserButton.addEventListener('click', () => {
+            stopTestCycle();
             isErasing = !isErasing;
             eraserButton.classList.toggle('active', isErasing);
             eraserButton.style.backgroundColor = isErasing ? '#999' : '';
@@ -446,11 +513,14 @@
         });
 
         clearButton.addEventListener('click', () => {
+            if (isGoLRunning) toggleGoL(); 
+            stopTestCycle();
             clearButton.style.display = 'none';
             clearConfirmationDiv.style.display = 'flex';
         });
 
         confirmClearYesButton.addEventListener('click', () => {
+            stopTestCycle();
             ctx.fillStyle = defaultCanvasColor;
             ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
             lastPaintedPixel = null;
@@ -476,8 +546,13 @@
             link.click();
         });
 
-        loadButton.addEventListener('click', () => loadImageInput.click());
+        loadButton.addEventListener('click', () => {
+            if (isGoLRunning) toggleGoL(); 
+            stopTestCycle();
+            loadImageInput.click();
+        });
         loadImageInput.addEventListener('change', (e) => {
+            stopTestCycle();
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
@@ -486,7 +561,14 @@
                 img.onload = () => {
                     ctx.fillStyle = defaultCanvasColor;
                     ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
-                    ctx.drawImage(img, 0, 0, specifiedCSSWidth, specifiedCSSHeight); // Draw to fit current canvas
+                    const hRatio = specifiedCSSWidth / img.width;
+                    const vRatio = specifiedCSSHeight / img.height;
+                    const ratio = Math.min(hRatio, vRatio);
+                    const centerShift_x = (specifiedCSSWidth - img.width * ratio) / 2;
+                    const centerShift_y = (specifiedCSSHeight - img.height * ratio) / 2;
+                    ctx.drawImage(img, 0, 0, img.width, img.height,
+                                  centerShift_x, centerShift_y, img.width * ratio, img.height * ratio);
+
                     lastPaintedPixel = null;
                     lastPixelCoordsDisplay.textContent = "-";
                     stopBlinkingLastPixel();
@@ -526,13 +608,19 @@
         document.addEventListener('mozfullscreenchange', onFullscreenChange);
         document.addEventListener('MSFullscreenChange', onFullscreenChange);
 
-        // --- KEYBOARD SHORTCUTS (Arrow Keys & Color Numbers) ---
+        // --- KEYBOARD SHORTCUTS ---
         window.addEventListener('keydown', (e) => {
             if (document.activeElement === colorPicker || 
                 document.activeElement === canvasWidthInput ||
                 document.activeElement === canvasHeightInput) return;
+            
+            if (isGoLRunning && (e.key === ' ' || e.code === 'Space')) { 
+                 e.preventDefault();
+                 toggleGoL();
+                 return;
+            }
+            if (isGoLRunning || isTestRunning) return; 
 
-            // Arrow key painting
             if (lastPaintedPixel) {
                 let dx = 0; dy = 0;
                 switch (e.key) {
@@ -546,25 +634,274 @@
                     if (newX_css >= 0 && newX_css < specifiedCSSWidth && newY_css >= 0 && newY_css < specifiedCSSHeight) {
                          paintPixel(newX_css, newY_css, isErasing ? eraserColor : currentColor);
                     }
-                    return; // Processed arrow key, no need to check for color keys
+                    return; 
                 }
             }
 
-            // Number key color selection
             if (colorKeyMap.hasOwnProperty(e.key)) {
                 e.preventDefault();
                 setColor(colorKeyMap[e.key]);
             }
         });
 
+
+        // --- GAME OF LIFE LOGIC ---
+        // (This section remains unchanged, but other functions now interact with it)
+        function initializeGoL() {
+            defaultCanvasColorRGB = hexToRgb(defaultCanvasColor);
+        }
+
+        function getPixelRGBFromImageData(imageData, x_css, y_css, dpr) {
+            const deviceX = Math.floor(x_css * dpr);
+            const deviceY = Math.floor(y_css * dpr);
+            const idx = (deviceY * imageData.width + deviceX) * 4;
+            if (idx < 0 || idx + 3 >= imageData.data.length) { 
+                return defaultCanvasColorRGB; 
+            }
+            return { r: imageData.data[idx], g: imageData.data[idx+1], b: imageData.data[idx+2] };
+        }
+
+        function isPixelAlive(pixelRgb, backgroundRgb) {
+            if (!pixelRgb || !backgroundRgb) return false;
+            return pixelRgb.r !== backgroundRgb.r || pixelRgb.g !== backgroundRgb.g || pixelRgb.b !== backgroundRgb.b;
+        }
+
+        function runGoLStep() {
+            if (!isGoLRunning || !defaultCanvasColorRGB || specifiedCSSWidth <= 0 || specifiedCSSHeight <= 0) return;
+
+            let currentFrameImageData;
+            try {
+                currentFrameImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            } catch(e) {
+                console.error("GoL: Could not getImageData from canvas.", e);
+                toggleGoL();
+                return;
+            }
+            
+            const logicalGrid = Array(specifiedCSSHeight);
+
+            for (let y = 0; y < specifiedCSSHeight; y++) {
+                logicalGrid[y] = Array(specifiedCSSWidth);
+                for (let x = 0; x < specifiedCSSWidth; x++) {
+                    const pixelRgb = getPixelRGBFromImageData(currentFrameImageData, x, y, currentDPR);
+                    logicalGrid[y][x] = {
+                        alive: isPixelAlive(pixelRgb, defaultCanvasColorRGB),
+                        r: pixelRgb.r, g: pixelRgb.g, b: pixelRgb.b
+                    };
+                }
+            }
+
+            const pixelsToRedraw = [];
+            for (let y = 0; y < specifiedCSSHeight; y++) {
+                for (let x = 0; x < specifiedCSSWidth; x++) {
+                    const currentCell = logicalGrid[y][x];
+                    const isCurrentlyAlive = currentCell.alive;
+                    const originalColorRGB = { r: currentCell.r, g: currentCell.g, b: currentCell.b };
+                    const originalColorString = rgbToCss(originalColorRGB);
+                    
+                    let liveNeighborsCount = 0;
+                    const liveNeighborColors = [];
+
+                    for (let dy = -1; dy <= 1; dy++) {
+                        for (let dx = -1; dx <= 1; dx++) {
+                            if (dx === 0 && dy === 0) continue;
+                            const nx = x + dx;
+                            const ny = y + dy;
+
+                            if (nx >= 0 && nx < specifiedCSSWidth && ny >= 0 && ny < specifiedCSSHeight) {
+                                if (logicalGrid[ny][nx].alive) {
+                                    liveNeighborsCount++;
+                                    liveNeighborColors.push({ r: logicalGrid[ny][nx].r, g: logicalGrid[ny][nx].g, b: logicalGrid[ny][nx].b});
+                                }
+                            }
+                        }
+                    }
+
+                    let nextCellWillBeAlive = false;
+                    let nextCellColorRGB = defaultCanvasColorRGB;
+
+                    if (isCurrentlyAlive) {
+                        if (liveNeighborsCount === 2 || liveNeighborsCount === 3) {
+                            nextCellWillBeAlive = true;
+                        }
+                    } else {
+                        if (liveNeighborsCount === 3) {
+                            nextCellWillBeAlive = true;
+                        }
+                    }
+
+                    if (nextCellWillBeAlive) {
+                        if (liveNeighborColors.length > 0) {
+                            const colorCounts = {};
+                            liveNeighborColors.forEach(color => {
+                                const key = `${color.r},${color.g},${color.b}`;
+                                colorCounts[key] = (colorCounts[key] || 0) + 1;
+                            });
+
+                            let maxCount = 0;
+                            let majorityColorKeys = []; 
+
+                            for (const key in colorCounts) {
+                                if (colorCounts[key] > maxCount) {
+                                    maxCount = colorCounts[key];
+                                    majorityColorKeys = [key];
+                                } else if (colorCounts[key] === maxCount) {
+                                    majorityColorKeys.push(key);
+                                }
+                            }
+                            
+                            let chosenKey = "";
+                            if (majorityColorKeys.length > 0) {
+                                if (isCurrentlyAlive) {
+                                    const originalCellColorKey = `${originalColorRGB.r},${originalColorRGB.g},${originalColorRGB.b}`;
+                                    if (majorityColorKeys.includes(originalCellColorKey)) {
+                                        chosenKey = originalCellColorKey; 
+                                    } else {
+                                        chosenKey = majorityColorKeys[0]; 
+                                    }
+                                } else {
+                                     chosenKey = majorityColorKeys[0]; 
+                                }
+                                
+                                const parts = chosenKey.split(',');
+                                nextCellColorRGB = { r: parseInt(parts[0]), g: parseInt(parts[1]), b: parseInt(parts[2]) };
+                            } else {
+                                if(isCurrentlyAlive) nextCellColorRGB = originalColorRGB;
+                                else nextCellWillBeAlive = false;
+                            }
+                        } else { 
+                            if (isCurrentlyAlive) {
+                                nextCellColorRGB = originalColorRGB;
+                            } else {
+                                nextCellWillBeAlive = false;
+                            }
+                        }
+                    }
+
+                    const finalColorToDraw = nextCellWillBeAlive ? rgbToCss(nextCellColorRGB) : defaultCanvasColor;
+                    
+                    if (finalColorToDraw !== originalColorString) {
+                         pixelsToRedraw.push({ x: x, y: y, newColor: finalColorToDraw });
+                    }
+                }
+            }
+
+            pixelsToRedraw.forEach(p => {
+                ctx.fillStyle = p.newColor;
+                ctx.fillRect(p.x, p.y, 1, 1);
+            });
+        }
+
+
+        function toggleGoL() {
+            stopTestCycle(); // Starting GoL stops the test cycle
+            if (isGoLRunning) {
+                clearInterval(golIntervalId);
+                isGoLRunning = false;
+                golButton.textContent = "Start GoL";
+                golButton.classList.remove('gol-active');
+                if (lastPaintedPixel) startBlinkingLastPixel();
+            } else {
+                isGoLRunning = true;
+                golButton.textContent = "Stop GoL";
+                golButton.classList.add('gol-active');
+                stopBlinkingLastPixel(); 
+                
+                runGoLStep(); 
+                golIntervalId = setInterval(runGoLStep, golStepDelay);
+            }
+        }
+        golButton.addEventListener('click', toggleGoL);
+
+        // --- NEW: TEST FEATURE LOGIC ---
+
+        function fillCanvasWithColor(color) {
+            stopTestCycle();
+            if (isGoLRunning) toggleGoL();
+            ctx.fillStyle = color;
+            ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
+            stopBlinkingLastPixel();
+            lastPaintedPixel = null;
+            lastPixelCoordsDisplay.textContent = "-";
+        }
+        
+        function runTestStep() {
+            const color = TEST_CYCLE_COLORS[currentTestColorIndex];
+            ctx.fillStyle = color;
+            ctx.fillRect(0, 0, specifiedCSSWidth, specifiedCSSHeight);
+            currentTestColorIndex = (currentTestColorIndex + 1) % TEST_CYCLE_COLORS.length;
+        }
+
+        function startTestCycle() {
+            if (isTestRunning) return;
+            if (isGoLRunning) toggleGoL();
+            stopBlinkingLastPixel();
+            lastPaintedPixel = null;
+            lastPixelCoordsDisplay.textContent = "-";
+            
+            isTestRunning = true;
+            testButton.classList.add('active');
+            currentTestColorIndex = 0;
+            runTestStep();
+            testIntervalId = setInterval(runTestStep, TEST_CYCLE_DELAY);
+        }
+
+        function stopTestCycle() {
+            if (!isTestRunning) return;
+            clearInterval(testIntervalId);
+            isTestRunning = false;
+            testButton.classList.remove('active');
+            testIntervalId = null;
+        }
+        
+        function toggleTestCycle() {
+            isTestRunning ? stopTestCycle() : startTestCycle();
+        }
+
+        testButton.addEventListener('mousedown', () => {
+            testHoldTimeoutId = setTimeout(() => {
+                stopTestCycle(); // Stop cycle before showing options
+                testOptionsContainer.style.display = 'flex';
+                // Position relative to button
+                const btnRect = testButton.getBoundingClientRect();
+                const toolbarRect = testButton.parentElement.parentElement.getBoundingClientRect();
+                testOptionsContainer.style.left = `${btnRect.left - toolbarRect.left + btnRect.width / 2}px`;
+            }, TEST_HOLD_DURATION);
+        });
+
+        testButton.addEventListener('mouseup', () => {
+            clearTimeout(testHoldTimeoutId);
+            if (testOptionsContainer.style.display === 'flex') {
+                testOptionsContainer.style.display = 'none';
+                return;
+            }
+            toggleTestCycle();
+        });
+
+        testButton.addEventListener('mouseleave', () => {
+             clearTimeout(testHoldTimeoutId);
+        });
+
+        document.getElementById('test-options-container').addEventListener('click', (e) => {
+            if (e.target.tagName === 'BUTTON') {
+                const color = e.target.dataset.color;
+                if (color) {
+                    fillCanvasWithColor(color);
+                }
+                testOptionsContainer.style.display = 'none';
+            }
+        });
+
+
         // --- INITIAL SETUP ---
+        initializeGoL(); 
         createSwatches();
         specifiedCSSWidth = parseInt(canvasWidthInput.value) || 640;
         specifiedCSSHeight = parseInt(canvasHeightInput.value) || 480;
         initialSizeApplied = true;
 
         resizeAndPreserveCanvas();
-        setColor(currentColor); // Ensure initial color and swatch are set
+        setColor(currentColor); 
         onFullscreenChange();
 
         let resizeDebounceTimeout;
